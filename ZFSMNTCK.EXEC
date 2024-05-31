@@ -1,0 +1,176 @@
+  /* ----------------------- REXX -------------------------- *
+  | ZFSMNTCK - Check for USS Mounts that are not defined in |
+  | the PARMLIB BPXPRMxx member(s).                         |
+  |                                                         |
+  | Depends upon SDSF REXX interface.                       |
+  * ------------------------------------------------------- *
+  | Copyleft (c) 2024 by Lionel B. Dyck                     |
+  * ------------------------------------------------------- */
+
+  /* ------------------- *
+  | Define our defaults |
+  * ------------------- */
+  parse value '' with null mounts.
+  mounts.0 = 0     /* counter for mounts */
+  ddn = 'ZFSM'random(9999)
+
+  /* -------------------------- *
+  | Enable SDSF REXX Interface |
+  * -------------------------- */
+  x = isfcalls('ON')  /* enable sdsf rexx */
+
+  /* ----------------------------- *
+  | Get info on OMVS Parm Members |
+  * ----------------------------- */
+  address sdsf isfexec '/d omvs'
+  c = isfulog.0
+  parse value isfulog.c with . 'OMVS=('bpxprmx')'.
+  bpxprmx = translate(bpxprmx,' ',',')
+
+  /* -------------------- *
+  | Get list of PARMLIBs |
+  * -------------------- */
+  address sdsf isfexec 'parm'
+  x = isfcalls('Off')     /* disable sdsf rexx */
+
+  /* ----------------------- *
+  | Ensure we are under TSO |
+  * ----------------------- */
+  Address TSO
+
+  /* ----------------------------------------- *
+  | Process the PARMLIB BPXPRMxx members used |
+  | and then extract the filesystem mounts    |
+  * ----------------------------------------- */
+  do ibpx = 1 to words(bpxprmx)
+    bpx = word(bpxprmx,ibpx)
+    x = check_for_bpxprmxx(bpx)
+    if x = 4 then iterate
+    x = extract_mounts(x)
+  end
+
+  /* ----------------------------------------------- *
+  | Get a list of the currently mounted filesystems |
+  * ----------------------------------------------- */
+  call get_current_mounts
+
+  /* -------------------------------- *
+  | Check current to bpxprmxx mounts |
+  | and report out                   |
+  * -------------------------------- */
+  say left('Mounted Filesystem',46) 'Mount Point'
+  do i = 1 to current.0
+    parse value current.i with zfs mount
+    if mounts.zfs /= null then iterate
+    say left(zfs,46) mount
+  end
+
+  Exit 0
+
+Check_For_BPXPRMxx: Procedure expose dsname.
+  arg suffix
+  bpxmem = 'BPXPRM'suffix
+
+  do i = 1 to dsname.0
+    dsn = "'"dsname.i"("bpxmem")'"
+    if sysdsn(dsn) = 'OK' then return dsn
+  end
+  return 4
+
+Extract_Mounts: Procedure expose mounts. ddn null
+  arg dsname
+  'alloc f('ddn') shr reuse ds('dsname')'
+  'execio * diskr' ddn '(finis stem in.'
+  'free f('ddn')'
+
+  call clean_comments
+
+  parse value '' with filesystem mountpoint
+
+  do i = 1 to in.0
+    if word(in.i,1) = 'ROOT'
+    then root = 1
+    else root = 0
+    if pos('FILESYSTEM(',in.i) > 0 then do
+      parse value in.i with . "FILESYSTEM('"filesystem"')".
+      if root = 1 then mountpoint = '/'
+      if pos('/',filesystem) > 0 then do
+        filesystem = null
+        iterate
+      end
+      if pos('.&',filesystem) > 0 then do
+        parse value filesystem with lfile'&'symbol'.'rfile
+        symbol = mvsvar('symdef',symbol)
+        filesystem = lfile || symbol || rfile
+      end
+    end
+    if pos('MOUNTPOINT(',in.i) > 0 then
+    parse value in.i with . 'MOUNTPOINT('mountpoint')'.
+    if mountpoint = null then iterate
+    if filesystem = null then iterate
+    c = mounts.0 + 1
+    mounts.c = filesystem mountpoint
+    mounts.0 = c
+    mounts.filesystem = mountpoint
+    parse value '' with filesystem mountpoint
+  end
+  Return 0
+
+Clean_Comments: Procedure Expose in.
+  cmt = 0
+  do i = 1 to in.0
+    in.i = strip(left(in.i,72),'T')  /* remove seq numbers */
+    cmt = startcmt()
+    if cmt = 1 then
+    cmt = endcmt()
+    /* pass 2 */
+    cmt = startcmt()
+    if cmt = 1 then
+    cmt = endcmt()
+  end
+  return
+
+startcmt:
+  if pos('/*',in.i) > 0 then do
+    if pos('*/',in.i) = 0 then do
+      parse value in.i with lf '/*' lr
+      in.i = lf lr
+      return 1
+    end
+    else do
+      parse value in.i with lf '/*' . '*/' lr
+      in.i = lf lr
+      return 0
+    end
+  end
+  return cmt
+endcmt:
+  if cmt = 1 then do
+    if pos('*/',in.i) = 0
+    then in.i = '  '
+    else do
+      if pos('*/',in.i) > 0
+      then parse value in.i with . '*/' in.i
+      else parse value in.i with '*/' in.i
+      return 0
+    end
+  end
+  return 1
+
+Get_Current_Mounts:
+  count = 0
+  x = syscalls('ON')
+  address syscall
+  numeric digits 12
+  'getmntent m.'
+  do i=1 to m.0
+    'statfs' m.mnte_fsname.i 's.'
+    if left(m.mnte_fsname.i,1) = '/' then iterate
+    if left(m.mnte_fsname.i,1) = '*' then iterate
+    mount = m.mnte_path.i
+    zfs   = m.mnte_fsname.i
+    count = count + 1
+    current.count = strip(zfs) mount
+    current.0 = count
+  end
+  return 0
