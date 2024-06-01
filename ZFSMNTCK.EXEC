@@ -2,7 +2,16 @@
   | ZFSMNTCK - Check for USS Mounts that are not defined in |
   | the PARMLIB BPXPRMxx member(s).                         |
   |                                                         |
+  | Any system symbolics in the FileSystems name will be    |
+  | resolved based on the local system.                     |
+  |                                                         |
+  | Note in a shared zfs plex that any mounted filesystems  |
+  | owned by other lpars will *not* be included in the      |
+  | report.                                                 |
+  |                                                         |
   | Depends upon SDSF REXX interface.                       |
+  * ------------------------------------------------------- *
+  | Note: Will not run under shell as sysdsn function mia   |
   * ------------------------------------------------------- *
   | Copyleft (c) 2024 by Lionel B. Dyck                     |
   * ------------------------------------------------------- */
@@ -13,6 +22,7 @@
   parse value '' with null mounts.
   mounts.0 = 0     /* counter for mounts */
   ddn = 'ZFSM'random(9999)
+  local = mvsvar('sysname')
 
   /* -------------------------- *
   | Enable SDSF REXX Interface |
@@ -60,8 +70,9 @@
   * -------------------------------- */
   say left('Mounted Filesystem',46) 'Mount Point'
   do i = 1 to current.0
-    parse value current.i with zfs mount
+    parse value current.i with zfs mount owner
     if mounts.zfs /= null then iterate
+    if owner /= local then iterate
     say left(zfs,46) mount
   end
 
@@ -167,10 +178,11 @@ Get_Current_Mounts:
     'statfs' m.mnte_fsname.i 's.'
     if left(m.mnte_fsname.i,1) = '/' then iterate
     if left(m.mnte_fsname.i,1) = '*' then iterate
+    owner = m.mnte_sysname.i
     mount = m.mnte_path.i
     zfs   = m.mnte_fsname.i
     count = count + 1
-    current.count = strip(zfs) mount
+    current.count = strip(zfs) mount owner
     current.0 = count
   end
   return 0
